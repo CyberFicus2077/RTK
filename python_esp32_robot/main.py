@@ -1,122 +1,123 @@
-# main.py
 import sys
 import time
 import pygame
+import cv2
 import config
 from drive import process_stick
 from network import RobotNetwork
-
+from vision import RobotVision
 
 def main():
-    # Инициализация pygame
     pygame.init()
     pygame.joystick.init()
 
     if pygame.joystick.get_count() == 0:
-        print("Ошибка: Геймпад не обнаружен! Подключи его и перезапусти.")
+        print("ОШИБКА: Геймпад не обнаружен! Подключите его и перезапустите.")
         sys.exit()
 
     joystick = pygame.joystick.Joystick(0)
     joystick.init()
-    print(f"Робот готов к управлению через: {joystick.get_name()}")
+    print(f"Контроллер: {joystick.get_name()} готов.")
 
-    # Запуск сети
     net = RobotNetwork()
-    print(f"Отправка UDP пакетов на {config.ESP32_IP}:{config.PORT}")
+    vision = RobotVision()
 
-    # Индексы кнопок для стандартного Xboxика
-    A_BUTTON_INDEX = 0
-    B_BUTTON_INDEX = 1
-    X_BUTTON_INDEX = 2
-    Y_BUTTON_INDEX = 3
-    LB_BUTTON_INDEX = 4
-    RB_BUTTON_INDEX = 5
+    auto_mode = False
+    last_start_state = 0
+    last_back_state = 0
 
-    # Индексы осей для триггеров LT и RT
-    # триггеры идут как оси: в покое -1.0, при полном нажатии +1.0)
-    LT_AXIS_INDEX = 4  
-    RT_AXIS_INDEX = 5  
+    # Настройка окна (сделаем его побольше)
+    cv2.namedWindow("Robot Stream", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Robot Stream", 1000, 750)
 
     try:
         while True:
             pygame.event.pump()
 
-            # Читаем абсолютно СЫРЫЕ оси напрямую для ходовых моторов
-            raw_x = joystick.get_axis(config.JOY_X_AXIS)
-            raw_y = joystick.get_axis(config.JOY_Y_AXIS)
+            # --- 1. ЛОГИКА КНОПОК РЕЖИМА ---
+            btn_start = joystick.get_button(config.BTN_START) # Три полоски
+            btn_back = joystick.get_button(config.BTN_BACK)   # Два окошка
 
-            # Прогоняем сырые координаты через исправленное ядро движения
-            left_byte, right_byte = process_stick(raw_x, raw_y)
+            # Переключатель Автопилота
+            if btn_start and not last_start_state:
+                auto_mode = not auto_mode
+                print(f"\n[РЕЖИМ] Автопилот: {'АКТИВИРОВАН' if auto_mode else 'ВЫКЛЮЧЕН'}")
+            last_start_state = btn_start
 
-            # 2. Читаем правый стик для манипулятора
-            raw_right_x = -(joystick.get_axis(config.JOY_RIGHT_X_AXIS)) * abs(joystick.get_axis(config.JOY_RIGHT_X_AXIS)) # Инвертировал x
-            raw_right_y = joystick.get_axis(config.JOY_RIGHT_Y_AXIS)
+            # Сброс найденного QR
+            if btn_back and not last_back_state:
+                vision.last_qr = None
+                print("\n[СИСТЕМА] Память QR очищена")
+            last_back_state = btn_back
 
-            right_x_byte = int(raw_right_x * 127 + 128)
-            right_y_byte = int(raw_right_y * 127 + 128)
+            # --- 2. ОБРАБОТКА ВИДЕО ---
+            ret, frame = vision.cap.read()
+            if not ret: continue
 
-            # 3. Читаем дискретные состояния кнопок и триггеров
-            lb_pressed = joystick.get_button(LB_BUTTON_INDEX)
-            rb_pressed = joystick.get_button(RB_BUTTON_INDEX)
+            # Обработка (полоски рисуются только если auto_mode=True)
+            frame, line_error, qr_data = vision.process_frame(frame, auto_mode)
+
+            # Вывод текста на экран
+            mode_text = "AUTO PILOT" if auto_mode else "MANUAL DRIVE"
+            mode_color = (0, 255, 0) if auto_mode else (0, 0, 255)
+            cv2.putText(frame, mode_text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, mode_color, 2)
             
-            # Считываем триггеры как оси: если прожаты глубже порога, считаем их активными (True)
-            lt_pressed = joystick.get_axis(LT_AXIS_INDEX) > 0.1
-            rt_pressed = joystick.get_axis(RT_AXIS_INDEX) > 0.1
+            if qr_data:
+                cv2.putText(frame, f"QR: {qr_data}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
-            a_pressed = joystick.get_button(A_BUTTON_INDEX)
-            b_pressed = joystick.get_button(B_BUTTON_INDEX)
-            x_pressed = joystick.get_button(X_BUTTON_INDEX)
-            y_pressed = joystick.get_button(Y_BUTTON_INDEX)
+            cv2.imshow("Robot Stream", frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'): break
 
-            # 4. СОБИРАЕМ НОВУЮ ВРЕМЕННУЮ БИТОВУЮ МАСКУ (Байт 5 
-            # 1-й бит: LB, 2-й: RB, 3-й: LT, 4-й: RT, 5-й: A, 6-й: B, 7-й: X, 8-й: Y
-            buttons1_byte = 0
-            if lb_pressed: buttons1_byte |= (1 << 0)
-            if rb_pressed: buttons1_byte |= (1 << 1)
-            if lt_pressed: buttons1_byte |= (1 << 2)
-            if rt_pressed: buttons1_byte |= (1 << 3)
-            if a_pressed:  buttons1_byte |= (1 << 4)
-            if b_pressed:  buttons1_byte |= (1 << 5)
-            if x_pressed:  buttons1_byte |= (1 << 6)
-            if y_pressed:  buttons1_byte |= (1 << 7)
+            # --- 3. УПРАВЛЕНИЕ МОТОРАМИ ---
+            if auto_mode:
+                if line_error is not None:
+                    speed, kp = 30, 50 # Можно подправить под твоего робота
+                    l = 128 + speed + (line_error * kp)
+                    r = 128 + speed - (line_error * kp)
+                    left_byte, right_byte = int(l), int(r)
+                else:
+                    left_byte, right_byte = 128, 128 # Стоп если линии нет
+            else:
+                # Читаем левый стик
+                lx = joystick.get_axis(config.JOY_X_AXIS)
+                ly = joystick.get_axis(config.JOY_Y_AXIS)
+                left_byte, right_byte = process_stick(lx, ly)
 
-            # 5. Чтение D-pad (Стрелок) для Байт 6 / buttons2
-            buttons2_byte = 0
-            hat = joystick.get_hat(0)  # Возвращает (x, y)
-            if hat[1] == 1:  buttons2_byte |= (1 << 0)  # Вверх
-            if hat[0] == 1:  buttons2_byte |= (1 << 1)  # Вправо
-            if hat[0] == -1: buttons2_byte |= (1 << 2)  # Влево
-            if hat[1] == -1: buttons2_byte |= (1 << 3)  # Вниз
+            # --- 4. МАНИПУЛЯТОР (Твоя логика) ---
+            rx = -(joystick.get_axis(config.JOY_RIGHT_X_AXIS)) * abs(joystick.get_axis(config.JOY_RIGHT_X_AXIS))
+            ry = joystick.get_axis(config.JOY_RIGHT_Y_AXIS)
+            right_x_byte = int(rx * 127 + 128)
+            right_y_byte = int(ry * 127 + 128)
 
-            # Отправляем пакет на робота
+            # Битовая маска кнопок (LB, RB, LT, RT, A, B, X, Y)
+            b1 = 0
+            if joystick.get_button(4): b1 |= (1 << 0) # LB
+            if joystick.get_button(5): b1 |= (1 << 1) # RB
+            if joystick.get_axis(4) > 0.1: b1 |= (1 << 2) # LT
+            if joystick.get_axis(5) > 0.1: b1 |= (1 << 3) # RT
+            if joystick.get_button(0): b1 |= (1 << 4) # A
+            if joystick.get_button(1): b1 |= (1 << 5) # B
+            if joystick.get_button(2): b1 |= (1 << 6) # X
+            if joystick.get_button(3): b1 |= (1 << 7) # Y
+
+            # --- 5. ОТПРАВКА ---
             net.send_packet(
-                left_motor=left_byte, 
-                right_motor=right_byte, 
-                joy_x=right_x_byte, 
+                left_motor=int(max(0, min(255, left_byte))),
+                right_motor=int(max(0, min(255, right_byte))),
+                joy_x=right_x_byte,
                 joy_y=right_y_byte,
-                buttons1=buttons1_byte,
-                buttons2=buttons2_byte
+                buttons1=b1,
+                buttons2=0
             )
 
-            # Отладкочка в терминал ноутбука
-            debug_y = -raw_y
-            print(
-                f"Стик Л: X={raw_x:+.2f} Y={debug_y:+.2f} | "
-                f"Стик П: X={raw_right_x:+.2f} Y={raw_right_y:+.2f} | "
-                f"Матч: LB={'1' if lb_pressed else '0'} LT={'1' if lt_pressed else '0'} RT={'1' if rt_pressed else '0'} B={'1' if b_pressed else '0'} | "
-                f"Байт5={bin(buttons1_byte)[2:].zfill(8)}", 
-                end="\r"
-            )
-
-            time.sleep(0.02)  # Частота отправки ~50 Гц
+            time.sleep(0.01)
 
     except KeyboardInterrupt:
-        print("\nПрограмма остановлена оператором.")
+        pass
     finally:
-        # При выходе плавно глушим робота
+        vision.release()
         net.send_packet(128, 128, 128, 128, 0, 0)
         pygame.quit()
-
 
 if __name__ == "__main__":
     main()
