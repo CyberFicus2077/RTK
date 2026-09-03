@@ -2,7 +2,7 @@
 import math
 
 # Сетевые настройки
-ESP32_IP = "192.168.1.139"  
+ESP32_IP = "192.168.1.216"  
 PORT = 99
 START_BYTE = 0xAA
 

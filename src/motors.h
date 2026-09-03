@@ -17,7 +17,7 @@ void initMotors() {
   pinMode(RIGHT_MOTOR_INB, OUTPUT);
 }
 
-bool isInverted = true;
+bool isInverted = false;
 int deadZone = 15;
 
 // Функция управления скоростью
