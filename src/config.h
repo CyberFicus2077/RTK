@@ -2,7 +2,7 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-const char* ssid = "K-LAB";
+const char* ssid = "K-lab-Robot";
 const char* password = "allhailklab";
 #define UDP_PORT 99
 

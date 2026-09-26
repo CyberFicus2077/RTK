@@ -1,27 +1,28 @@
 # config.py
 import math
 
-# Сетевые настройки
-ESP32_IP = "192.168.1.216"  
+# Сетевые настройки (робот)
+ESP32_IP = "192.168.10.101"
 PORT = 99
 START_BYTE = 0xAA
 
-JOY_X_AXIS = 0  
-JOY_Y_AXIS = 1  
-JOY_RIGHT_X_AXIS = 2  # Правый стик: влево-вправо
-JOY_RIGHT_Y_AXIS = 3  # Правый стик: вверх-вниз
+# --- Камера ---
+# Одна аналоговая FPV-камера через SkyDroid (USB-видеозахват).
+# Индекс устройства подбирается скриптом test_cam.py:
+CAM_URL = 1
 
-# НАСТРОЙКА УПРАВЛЕНИЯ
-TURN_SENSITIVITY = 1.5  # Кривая плавности поворота
+JOY_X_AXIS = 0
+JOY_Y_AXIS = 1
+JOY_RIGHT_X_AXIS = 2
+JOY_RIGHT_Y_AXIS = 3
 
-# 1. Геометрия зоны разворота на месте
-SPIN_ANGLE_RAD = math.pi / 7  # Угол конуса разворота (~22.5 градусов)
-SPIN_Y_LIMIT = 0.2            # Высота |Y|, внутри которой разрешен разворот
+TURN_SENSITIVITY = 1.5
 
-# 2. Геометрия зоны тишины (внешняя подушка безопасности)
-# Она должна быть ШИРЕ конуса и ВЫШЕ лимита разворота
-SILENCE_ANGLE_RAD = math.pi / 7  # Угол конуса тишины (~30 градусов)
-SILENCE_Y_LIMIT = 0.21           # Высота |Y|, до которой действует тишина
-# Индексы кнопок управления режимами
-BTN_BACK = 6   # Кнопка с двумя окошками (View)
-BTN_START = 7  # Кнопка с тремя полосками (Menu)
+SPIN_ANGLE_RAD = math.pi / 7
+SPIN_Y_LIMIT = 0.2
+
+SILENCE_ANGLE_RAD = math.pi / 7
+SILENCE_Y_LIMIT = 0.21
+
+BTN_BACK = 6
+BTN_START = 7
