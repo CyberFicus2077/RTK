@@ -6,10 +6,12 @@ ESP32_IP = "192.168.10.101"
 PORT = 99
 START_BYTE = 0xAA
 
-# --- Камера ---
-# Одна аналоговая FPV-камера через SkyDroid (USB-видеозахват).
-# Индекс устройства подбирается скриптом test_cam.py:
-CAM_URL = 1
+# --- Камеры (два SkyDroid через USB) ---
+# Индексы из test_cam.py. Пример:
+#   CAM1_URL = 1   # первый SkyDroid
+#   CAM2_URL = 2   # второй SkyDroid
+CAM1_URL = 1
+CAM2_URL = 2
 
 JOY_X_AXIS = 0
 JOY_Y_AXIS = 1
@@ -26,3 +28,4 @@ SILENCE_Y_LIMIT = 0.21
 
 BTN_BACK = 6
 BTN_START = 7
+BTN_SWITCH_CAM = 1   # кнопка B на Xbox
