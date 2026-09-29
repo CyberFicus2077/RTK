@@ -1,15 +1,9 @@
 # camera_manager.py
-"""
-Менеджер двух USB-камер (SkyDroid).
-- Каждая камера читается в своём потоке.
-- Основной цикл не блокируется.
-- Режимы: cam1 / cam2 (переключаются по кнопке B).
-"""
-
 import cv2
 import threading
 import queue
 import time
+import platform
 
 
 class CameraStream:
@@ -23,20 +17,45 @@ class CameraStream:
         self.thread = None
         self.cap = None
         self.ok = False
+        self._lock = threading.Lock()
 
     def start(self):
-        self.running = True
-        self.thread = threading.Thread(target=self._update, daemon=True)
-        self.thread.start()
+        with self._lock:
+            if self.running:
+                print(f"[{self.name}] Уже запущена")
+                return
+            self.running = True
+            self.thread = threading.Thread(target=self._update, daemon=True)
+            self.thread.start()
+
+    def _choose_backend(self):
+        sys_name = platform.system()
+        if sys_name == "Windows":
+            return cv2.CAP_DSHOW
+        if sys_name == "Linux":
+            return cv2.CAP_V4L2
+        return cv2.CAP_ANY
+
+    def _open_capture(self):
+        backend = self._choose_backend()
+        cap = cv2.VideoCapture(self.source, backend)
+        if not cap.isOpened() and backend != cv2.CAP_ANY:
+            # Фолбэк, если конкретный backend не сработал
+            cap.release()
+            cap = cv2.VideoCapture(self.source, cv2.CAP_ANY)
+        return cap
 
     def _update(self):
-        self.cap = cv2.VideoCapture(self.source, cv2.CAP_DSHOW)
+        self.cap = self._open_capture()
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
 
         if not self.cap.isOpened():
             print(f"[{self.name}] Камера {self.source} не открылась")
             self.ok = False
+            with self._lock:
+                self.running = False
             return
 
         self.ok = True
@@ -45,18 +64,29 @@ class CameraStream:
         for _ in range(10):
             self.cap.read()
 
-        while self.running:
+        while True:
+            with self._lock:
+                if not self.running:
+                    break
+
             ret, frame = self.cap.read()
             if not ret:
                 time.sleep(0.01)
                 continue
+
             try:
                 self.frame_queue.get_nowait()
             except queue.Empty:
                 pass
-            self.frame_queue.put(frame)
+
+            try:
+                self.frame_queue.put_nowait(frame)
+            except queue.Full:
+                # На случай гонки между get/put
+                pass
 
         self.cap.release()
+        self.ok = False
 
     def get_frame(self):
         try:
@@ -65,9 +95,13 @@ class CameraStream:
             return None
 
     def stop(self):
-        self.running = False
+        with self._lock:
+            self.running = False
+
         if self.thread:
-            self.thread.join(timeout=1)
+            self.thread.join(timeout=2.0)
+            if self.thread.is_alive():
+                print(f"[{self.name}] Поток камеры не завершился за timeout")
 
 
 class CameraManager:

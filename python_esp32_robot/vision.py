@@ -3,44 +3,18 @@ import numpy as np
 
 
 class RobotVision:
-    """Зрение робота-следопыта с РУЧНЫМ порогом бинаризации.
-
-    Ключевое отличие от Otsu-версии:
-      * Otsu сам делит пиксели на два класса по гистограмме. Если тень
-        робота большая и тёмная, Otsu может поставить порог МЕЖДУ тенью
-        и полом — и тогда "линией" станет тень.
-      * Здесь порог задаётся вручную и подбирается экспериментально
-        трекбаром. Тень (~90) отсекается, линия (~20) остаётся.
-
-    Поведение при потере линии:
-      * error "замораживается" на последнем ненулевом значении, чтобы
-        робот продолжал ехать в том же направлении (coasting).
-      * Счётчик lost_frames считает подряд идущие потерянные кадры.
-        Если max_lost_frames > 0 и счётчик его превысил — error снова
-        становится None (аварийная остановка на стороне вызывающего).
-
-    Защита от бага OpenCV 5.0.0:
-      * detectAndDecode на некоторых кадрах бросает cv2.error
-        (qrcode.cpp:2940, вырожденный контур нулевой площади).
-        Ловим и трактуем как "QR в этом кадре нет".
-    """
-
     DEFAULT_THRESHOLD = 60
     THRESHOLD_MAX = 255
 
     def __init__(self, camera_index=None):
-        # Камеру НЕ открываем — кадры приходят извне (CameraManager).
-        # camera_index нужен только для отладки через __main__.
         self.cap = None
         if camera_index is not None:
             self.cap = cv2.VideoCapture(camera_index)
             if not self.cap.isOpened():
-                print(f"Предупреждение: камера {camera_index} недоступна. "
-                      f"Пробуем индекс 0...")
+                print(f"Предупреждение: камера {camera_index} недоступна. Пробуем индекс 0...")
                 self.cap = cv2.VideoCapture(0)
             if not self.cap.isOpened():
-                raise RuntimeError("Не удалось подключиться ни к одной камере. "
-                                   "Проверьте USB-подключение.")
+                raise RuntimeError("Не удалось подключиться ни к одной камере.")
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
             for _ in range(10):
@@ -60,8 +34,10 @@ class RobotVision:
         self.debug_window = "Binary Threshold (Debug)"
         cv2.namedWindow(self.debug_window, cv2.WINDOW_NORMAL)
         cv2.createTrackbar(
-            "Darkness", self.debug_window,
-            self.thresh_value, self.THRESHOLD_MAX,
+            "Darkness",
+            self.debug_window,
+            self.thresh_value,
+            self.THRESHOLD_MAX,
             self._on_threshold_change,
         )
         cv2.resizeWindow(self.debug_window, 480, 300)
@@ -107,24 +83,20 @@ class RobotVision:
         return img
 
     def process_frame(self, frame, auto_mode=True, debug=True,
-                      coast_after_lost=True, max_lost_frames=0):
-        # --- ДОБАВЛЕНО: если кадр не передан — берём с камеры как раньше ---
+                      coast_after_lost=True, max_lost_frames=20):
         if frame is None:
             if self.cap is None:
                 return None, None, self.last_qr
             ret, frame = self.cap.read()
             if not ret or frame is None or frame.size == 0:
                 return None, None, self.last_qr
-        # --- КОНЕЦ ДОБАВЛЕНИЯ ---
 
         if frame is None or frame.size == 0:
             return frame, None, self.last_qr
 
         h, w = frame.shape[:2]
 
-        # ---------------- 1. QR-код ----------------
         data, bbox = self._detect_qr(frame)
-
         if data:
             self.last_qr = data
             if bbox is not None:
@@ -133,7 +105,6 @@ class RobotVision:
                 cv2.putText(frame, f"QR: {data}", (10, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
-        # ---------------- 2. Поиск линии ----------------
         error = None
         if auto_mode:
             roi_top = int(h * 0.8)
@@ -159,8 +130,7 @@ class RobotVision:
 
             if debug:
                 mask_bgr = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
-                mode = ("OTSU" if self.use_otsu
-                        else f"MANUAL thr={self.thresh_value}")
+                mode = "OTSU" if self.use_otsu else f"MANUAL thr={self.thresh_value}"
                 cv2.putText(mask_bgr, mode, (8, 20),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 2)
 
@@ -169,8 +139,7 @@ class RobotVision:
                     hist_vis, (mask_bgr.shape[1], 100),
                     interpolation=cv2.INTER_NEAREST)
 
-                cv2.imshow(self.debug_window,
-                           np.vstack([mask_bgr, hist_vis]))
+                cv2.imshow(self.debug_window, np.vstack([mask_bgr, hist_vis]))
 
             contours, _ = cv2.findContours(
                 thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -185,8 +154,7 @@ class RobotVision:
                         valid_candidates.append((c, cx_full, area))
 
             if valid_candidates:
-                target_x = (self.last_cx if self.last_cx is not None
-                            else (w // 2))
+                target_x = self.last_cx if self.last_cx is not None else (w // 2)
                 best = min(
                     valid_candidates,
                     key=lambda item: abs(item[1] - target_x) / (item[2] ** 0.5),
@@ -220,54 +188,3 @@ class RobotVision:
         if self.cap is not None:
             self.cap.release()
         cv2.destroyAllWindows()
-
-
-if __name__ == "__main__":
-    vision = RobotVision(camera_index=1)
-    last_shown = vision.thresh_value
-
-    print("Управление:")
-    print("  трекбар 'Darkness' — вручную задать порог темноты")
-    print("  'o' — переключить Otsu / ручной режим")
-    print("  'r' — сбросить порог к значению по умолчанию")
-    print("  'q' — выход")
-
-    try:
-        while True:
-            ret, frame = vision.cap.read()
-            if not ret:
-                print("Кадр не получен, завершение...")
-                break
-
-            processed, err, qr = vision.process_frame(frame, auto_mode=True)
-
-            if vision.thresh_value != last_shown:
-                last_shown = vision.thresh_value
-                print(f"[THRESHOLD] {last_shown}")
-
-            if err is not None:
-                status = f"Error: {err:.2f}"
-            else:
-                status = "Line: LOST"
-
-            if vision.lost_frames > 0:
-                status += f"  (coast {vision.lost_frames})"
-
-            mode = "OTSU" if vision.use_otsu else f"THR {vision.thresh_value}"
-            cv2.putText(processed, f"{status}   {mode}", (10, 60),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-
-            cv2.imshow("Robot Vision", processed)
-
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord("q"):
-                break
-            elif key == ord("o"):
-                vision.set_otsu(not vision.use_otsu)
-                print(f"[MODE] {'OTSU' if vision.use_otsu else 'MANUAL'}")
-            elif key == ord("r"):
-                vision.reset_threshold()
-                cv2.setTrackbarPos("Darkness", vision.debug_window,
-                                   vision.thresh_value)
-    finally:
-        vision.release()
