@@ -4,6 +4,7 @@
 #include "motors.h"
 #include "servos.h"
 #include "suspension.h"
+#include <ESP32Servo.h>
 
 WiFiUDP udp;
 uint8_t packetBuffer[PACKET_SIZE];
@@ -39,7 +40,7 @@ void setup() {
 
   initMotors();
   initServos();
-  initSuspension();
+  initSuspension(); // Инициализация подвески
 
   udp.begin(UDP_PORT);
   Serial.println("UDP приемник запущен.");
@@ -95,6 +96,9 @@ void loop() {
         }
 
         updateGripper3(l_trigger, r_trigger);
+        
+        // ВЫЗОВ УПРАВЛЕНИЯ ПОДВЕСКОЙ
+        updateSuspension();
 
         if (b_button && (millis() - lastButtonPress > DEBOUNCE_DELAY)) {
           lastButtonPress = millis();
